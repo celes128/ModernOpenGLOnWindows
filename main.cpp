@@ -12,141 +12,141 @@
 // GLOBALS
 HINSTANCE   hInst;
 WCHAR       szTitle[MAX_LOADSTRING];
-WCHAR       szWindowClass[MAX_LOADSTRING];
-HDC         hdc;
-HGLRC       hglrc;
+LPCWSTR     g_windowClassName   = L"MyWindowClass";
+LPCWSTR     g_windowTitle       = L"My Application";
 bool        quit{ false };
 Game        game;
 
-void InitOpenGL(HWND hwnd, HDC *hdc, HGLRC *hglrc)
-{
-    PIXELFORMATDESCRIPTOR pfd = {
-        sizeof(PIXELFORMATDESCRIPTOR),
-        1,
-        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,    // Flags
-        PFD_TYPE_RGBA,        // The kind of framebuffer. RGBA or palette.
-        32,                   // Colordepth of the framebuffer.
-        0, 0, 0, 0, 0, 0,
-        0,
-        0,
-        0,
-        0, 0, 0, 0,
-        24,                   // Number of bits for the depthbuffer
-        8,                    // Number of bits for the stencilbuffer
-        0,                    // Number of Aux buffers in the framebuffer.
-        PFD_MAIN_PLANE,
-        0,
-        0, 0, 0
-    };
-
-    *hdc = GetDC(hwnd);
-
-    auto pxfmt = ChoosePixelFormat(*hdc, &pfd);
-    SetPixelFormat(*hdc, pxfmt, &pfd);
-
-    *hglrc = wglCreateContext(*hdc);
-    wglMakeCurrent(*hdc, *hglrc);
-}
-
-void ShutdownOpenGL(HWND hwnd, HDC hdc, HGLRC hglrc)
-{
-    wglMakeCurrent(hdc, NULL);
-    wglDeleteContext(hglrc);
-    ReleaseDC(hwnd, hdc);
-}
-
-int APIENTRY wWinMain(_In_ HINSTANCE hInstance
-    , _In_opt_ HINSTANCE hPrevInstance
-    , _In_ LPWSTR    lpCmdLine
-    , _In_ int       nCmdShow)
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
     
-    miny::Result res = miny::OK;
-
-    LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
-    LoadStringW(hInstance, IDC_WINDOWAPP, szWindowClass, MAX_LOADSTRING);
-    MyRegisterClass(hInstance);
-
-    auto hwnd = InitInstance(hInstance, nCmdShow);
-    if (hwnd == NULL) {
-        return FALSE;
+    CoreSystems sys;
+    
+    auto result = InitializeCoreSystems(hInstance, nCmdShow, &sys);
+    if (!result) {
+        return 1;
     }
     
-    InitOpenGL(hwnd, &hdc, &hglrc);
-    res = game.Initialize(hwnd);
-    if (!res) {
-        return CLOSE_APPLICATION;
-    }
+    MainLoop(&sys);
 
-    ShowWindow(hwnd, nCmdShow);
-    UpdateWindow(hwnd);
-
-    MainLoop(hwnd);
-
-    game.Shutdown();
-    ShutdownOpenGL(hwnd, hdc, hglrc);
-
+    //game.Shutdown();
+    TerminateCoreSystems(&sys);
     return 0;
 }
 
-ATOM MyRegisterClass(HINSTANCE hInstance)
+miny::Result InitializeCoreSystems(in_ HINSTANCE hinstance, in_ int nCmdShow, out_ CoreSystems* sys)
 {
+    assert(sys != nullptr);
+    
+    miny::Result result = miny::OK;
+
+    *sys = { 0 };
+    sys->hinstance = hinstance;
+    sys->winSize = SIZE{ 800, 600 };
+
+    result = CreateTheWindow(in_ sys->winSize, in_ hinstance, out_ & sys->hwnd);
+    if (!result) {
+        return miny::FAILED;
+    }
+    
+    result = InitializeGraphics(in_ sys->hwnd, in_ sys->winSize, in_ hinstance, out_ &sys->graphics);
+    if (!result) {
+        DestroyTheWindow(&sys->hwnd);
+        return miny::FAILED;
+    }
+
+    ShowWindow(sys->hwnd, nCmdShow);
+    UpdateWindow(sys->hwnd);
+
+    return miny::OK;
+}
+
+void TerminateCoreSystems(in_ out_ CoreSystems* sys)
+{
+    assert(sys != nullptr);
+
+    TerminateGraphics(&sys->graphics);
+    DestroyTheWindow(&sys->hwnd);
+}
+
+miny::Result CreateTheWindow(in_ SIZE size, in_ HINSTANCE hinstance, out_ HWND* hwnd)
+{
+    assert(hwnd != nullptr);
+
+    // Create a window class
     WNDCLASSEXW wcex;
-
     wcex.cbSize = sizeof(WNDCLASSEX);
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = WndProc;
+    wcex.cbClsExtra = 0;
+    wcex.cbWndExtra = 0;
+    wcex.hInstance = hinstance;
+    wcex.hIcon = LoadIcon(hinstance, MAKEINTRESOURCE(IDI_WINDOWAPP));
+    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wcex.lpszMenuName = 0;
+    wcex.lpszClassName = g_windowClassName;
+    wcex.hIconSm = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
 
-    wcex.style          = CS_HREDRAW | CS_VREDRAW;
-    wcex.lpfnWndProc    = WndProc;
-    wcex.cbClsExtra     = 0;
-    wcex.cbWndExtra     = 0;
-    wcex.hInstance      = hInstance;
-    wcex.hIcon          = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_WINDOWAPP));
-    wcex.hCursor        = LoadCursor(nullptr, IDC_ARROW);
-    wcex.hbrBackground  = (HBRUSH)(COLOR_WINDOW+1);
-    wcex.lpszMenuName   = 0;
-    wcex.lpszClassName  = szWindowClass;
-    wcex.hIconSm        = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
+    // Register this window class
+    auto atom = RegisterClassExW(&wcex);
 
-    return RegisterClassExW(&wcex);
+    // Determine the window rectangle size so that the client area has the requested size
+    auto winRect = RECT{ 0, 0, size.cx, size.cy };
+    DWORD winStyle = WS_OVERLAPPEDWINDOW;
+    AdjustWindowRect(&winRect, winStyle, FALSE);
+
+    // Create the app window
+    *hwnd = CreateWindowW(g_windowClassName, g_windowTitle, winStyle,
+        0, 0, Width(winRect), Height(winRect),
+        nullptr, nullptr, hinstance, nullptr
+    );
+    if (*hwnd == NULL) {
+        return miny::FAILED;
+    }
+
+    return miny::OK;
 }
 
-HWND InitInstance(HINSTANCE hInstance, int nCmdShow)
+void DestroyTheWindow(in_ out_ HWND* hwnd)
 {
-   hInst = hInstance;
+    assert(hwnd != nullptr);
 
-   // Compute the window size so that the client area has the size I want
-   RECT winRect{
-       0, 0,
-       800, 600,
-   };
-   DWORD winStyle = WS_OVERLAPPEDWINDOW;
-   AdjustWindowRect(
-       &winRect,
-       winStyle,
-       FALSE        // no menu
-   );
-
-   auto hwnd = CreateWindowW(
-       szWindowClass,
-       szTitle,
-       winStyle,
-       0, 0,
-       Width(winRect), Height(winRect),
-       nullptr,
-       nullptr,
-       hInstance,
-       nullptr
-   );
-   if (hwnd == NULL) {
-       return NULL;
-   }
-
-   return hwnd;
+    DestroyWindow(*hwnd);
+    *hwnd = nullptr;
 }
 
-int MainLoop(HWND hwnd)
+miny::Result InitializeGraphics(in_ HWND hwnd, in_ SIZE winSize, in_ HINSTANCE hinstance, out_ Graphics** graphics)
+{
+    assert(graphics != nullptr);
+
+    *graphics = new Graphics();
+    if (*graphics == nullptr) {
+        return miny::FAILED;
+    }
+
+    auto result = (*graphics)->Initialize(hwnd, winSize, hinstance);
+    if (!result) {
+        delete *graphics;
+        *graphics = nullptr;
+        return miny::FAILED;
+    }
+
+    return miny::OK;
+}
+
+void TerminateGraphics(out_ Graphics** graphics)
+{
+    if (graphics && *graphics) {
+        (*graphics)->Terminate();
+        delete *graphics;
+        *graphics = nullptr;
+    }
+}
+
+int MainLoop(in_ CoreSystems* sys)
 {
     MSG msg{ 0 };
 
@@ -181,11 +181,11 @@ int MainLoop(HWND hwnd)
             }
 
             // Rendering however is done at each iteration of this loop
-            float blue = 0.5f * (1.f + cosf(t / 1e6));
+            float blue = 0.5f * (1.f + cosf((float)(t / 1e6)));
             glClearColor(0.f, 0.f, blue, 1.f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             game.Render();
-            SwapBuffers(hdc);
+            sys->graphics->Present();
 
             // Print the framerate
             auto fps = (float)(1e6) / dt;
